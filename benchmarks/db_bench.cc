@@ -6,7 +6,7 @@
 #include <numaif.h>
 #endif
 #include <sys/types.h>
-
+#include <gflags/gflags.h>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -48,7 +48,8 @@
 //      stats       -- Print DB stats
 //      sstables    -- Print sstable info
 //      heapprofile -- Dump a heap profile (if supported by this port)
-static const char* FLAGS_benchmarks =
+DEFINE_string(
+    benchmarks, 
     "fillseq,"
     "fillsync,"
     "fillrandom,"
@@ -64,78 +65,51 @@ static const char* FLAGS_benchmarks =
     "fill100K,"
     "crc32c,"
     "snappycomp,"
-    "snappyuncomp,";
+    "snappyuncomp,", "");
 
-// Number of key/values to place in database
-static int FLAGS_num = 1000000;
 
-// Number of read operations to do.  If negative, do FLAGS_num reads.
-static int FLAGS_reads = -1;
+DEFINE_int32(num, 1000000, "Number of key/values to place in database");
+DEFINE_int32(reads, -1, "Number of read operations to do.  If negative, do FLAGS_num reads");
+DEFINE_int32(threads, 1, "Number of concurrent threads to run");
+DEFINE_int32(key_size, 20, "Size of each value");
+DEFINE_int32(value_size, 400, "Size of each value");
+DEFINE_double(compression_ratio, 0.5, "Arrange to generate values that shrink to this fraction of"
+                                      "their original size after compression");
+DEFINE_bool(histogram, false, "Print histogram of operation timings");
+DEFINE_bool(comparisons, false, "Count the number of string comparisons performed");
+DEFINE_int32(compute_node_id, 0, "");
+DEFINE_int32(cache_size, -1, "Number of bytes to use as a table_cache of uncompressed data, Negative means use no table_cache");
+DEFINE_int32(open_files, 0, "Maximum number of files to keep open at the same time (use default if == 0)");
+DEFINE_int32(block_restart_interval, 1, "sstable data block restart interval");
+DEFINE_int32(bloom_bits, 10, "Bloom filter bits per key, Negative means use default settings");
+DEFINE_int32(key_prefix, 0, "Common key prefix length");
+DEFINE_bool(enable_numa, false, "whether the writer threads aware of the NUMA archetecture");
+DEFINE_bool(reuse_logs, false, "If true, reuse existing log/MANIFEST files when re-opening a database");
+DEFINE_int32(readwritepercent, 90, "");
+DEFINE_int32(ops_between_duration_checks, 2000, "");
+DEFINE_int32(duration, 0, "");
+DEFINE_string(db, "", "Use the db with the following name");
 
-// Number of concurrent threads to run.
-static int FLAGS_threads = 1;
-
-// Size of each value
-static int FLAGS_value_size = 400;
-// Size of each value
-static int FLAGS_key_size = 20;
-// Arrange to generate values that shrink to this fraction of
-// their original size after compression
-static double FLAGS_compression_ratio = 0.5;
-
-// Print histogram of operation timings
-static bool FLAGS_histogram = false;
-
-// Count the number of string comparisons performed
-static bool FLAGS_comparisons = false;
-
-// Number of bytes to buffer in memtable before compacting
-// (initialized to default value by "main")
-static int FLAGS_write_buffer_size = 0;
-
-// Number of bytes written to each file.
-// (initialized to default value by "main")
-static int FLAGS_max_file_size = 0;
-
-// Approximate size of user data packed per block (before compression.
-// (initialized to default value by "main")
-static int FLAGS_block_size = 0;
-
-// Number of bytes to use as a table_cache of uncompressed data.
-// Negative means use no table_cache.
-static int FLAGS_cache_size = -1;
-
-// Maximum number of files to keep open at the same time (use default if == 0)
-static int FLAGS_open_files = 0;
-
-static int FLAGS_block_restart_interval = 1;
-// Bloom filter bits per key.
-// Negative means use default settings.
-static int FLAGS_bloom_bits = 10;
-
-// Common key prefix length.
-static int FLAGS_key_prefix = 0;
+// if larger than 0, the compute node will always have this number of shards no matter how many memory
+// nodes are there. THe shards will be distributed to the memory nodes in a round robin manner.
+DEFINE_int32(fixed_compute_shards_num, 0, "see code comment");
 
 // If true, do not destroy the existing database.  If you set this
 // flag and also specify a benchmark that wants a fresh database, that
 // benchmark will fail.
-static bool FLAGS_use_existing_db = false;
+DEFINE_bool(use_existing_db, false, "see code comment");
 
-// if larger than 0, the compute node will always have this number of shards no matter how many memory
-//nodes are there. THe shards will be distributed to the memory nodes in a round robin
-// manner.
-static int FLAGS_fixed_compute_shards_num = 0;
-// whether the writer threads aware of the NUMA archetecture.
-static bool FLAGS_enable_numa = false;
-// If true, reuse existing log/MANIFEST files when re-opening a database.
-static bool FLAGS_reuse_logs = false;
+// following are initialized to default value by `main`
+DEFINE_int32(write_buffer_size, 0, "Number of bytes to buffer in memtable before compacting");
+DEFINE_int32(max_file_size, 0, "Number of bytes written to each file");
+DEFINE_int32(block_size, 0, "Approximate size of user data packed per block (before compression)");
 
-// Use the db with the following name.
-static const char* FLAGS_db = nullptr;
+static bool FLAGS_record_speed = false;
 
-static int FLAGS_readwritepercent = 90;
-static int FLAGS_ops_between_duration_checks = 2000;
-static int FLAGS_duration = 0;
+static uint64_t FLAGS_record_inerval = 1000;  // 1000ms = 1s
+
+static std::string FLAGS_record_dump_path = "reocrd_speed_result.txt";
+
 namespace dLSM {
 
 namespace {
@@ -287,8 +261,8 @@ class Stats {
   double start_;
   double finish_;
   double seconds_;
-  int done_;
-  int next_report_;
+  std::atomic<uint64_t> done_;
+  uint64_t next_report_;
   int64_t bytes_;
   double last_op_finish_;
   Histogram hist_;
@@ -296,6 +270,10 @@ class Stats {
 
  public:
   Stats() { Start(); }
+  
+  inline uint64_t GetFinishedOps() {
+    return done_.load(std::memory_order_relaxed);
+  }
 
   void Start() {
     next_report_ = 100;
@@ -338,8 +316,8 @@ class Stats {
       last_op_finish_ = now;
     }
 
-    done_++;
-    if (done_ >= next_report_) {
+    done_.fetch_add(1, std::memory_order_relaxed);
+    if (GetFinishedOps() >= next_report_) {
       if (next_report_ < 1000)
         next_report_ += 100;
       else if (next_report_ < 5000)
@@ -354,7 +332,7 @@ class Stats {
         next_report_ += 50000;
       else
         next_report_ += 100000;
-      std::fprintf(stderr, "... finished %d ops%30s\r", done_, "");
+      std::fprintf(stderr, "... finished %lu ops%30s\r", GetFinishedOps(), "");
       std::fflush(stderr);
     }
   }
@@ -534,7 +512,7 @@ class Benchmark {
     g_env->GetChildren(FLAGS_db, &files);
     for (size_t i = 0; i < files.size(); i++) {
       if (Slice(files[i]).starts_with("heap-")) {
-        g_env->RemoveFile(std::string(FLAGS_db) + "/" + files[i]);
+        g_env->RemoveFile(FLAGS_db + "/" + files[i]);
       }
     }
     if (!FLAGS_use_existing_db) {
@@ -599,7 +577,7 @@ class Benchmark {
     PrintHeader();
     Open();
 
-    const char* benchmarks = FLAGS_benchmarks;
+    const char* benchmarks = FLAGS_benchmarks.c_str();
 //    Validation_Write();
     while (benchmarks != nullptr) {
 
@@ -1413,7 +1391,7 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
 
   void HeapProfile() {
     char fname[100];
-    std::snprintf(fname, sizeof(fname), "%s/heap-%04d", FLAGS_db,
+    std::snprintf(fname, sizeof(fname), "%s/heap-%04d", FLAGS_db.c_str(),
                   ++heap_counter_);
     WritableFile* file;
     Status s = g_env->NewWritableFile(fname, &file);
@@ -1433,73 +1411,9 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
 }  // namespace dLSM
 
 int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  dLSM::RDMA_Manager::node_id = 2*FLAGS_compute_node_id+1;
 
-  for (int i = 1; i < argc; i++) {
-    double d;
-    int n;
-    char junk;
-    if (dLSM::Slice(argv[i]).starts_with("--benchmarks=")) {
-      FLAGS_benchmarks = argv[i] + strlen("--benchmarks=");
-    } else if (sscanf(argv[i], "--compression_ratio=%lf%c", &d, &junk) == 1) {
-      FLAGS_compression_ratio = d;
-    } else if (sscanf(argv[i], "--compute_node_id=%d%c", &n, &junk) == 1) {
-      //Set Node id to RDMA manager's static value directly.
-      dLSM::RDMA_Manager::node_id = 2*n+1;
-    } else if (sscanf(argv[i], "--histogram=%d%c", &n, &junk) == 1 &&
-               (n == 0 || n == 1)) {
-      FLAGS_histogram = n;
-    } else if (sscanf(argv[i], "--comparisons=%d%c", &n, &junk) == 1 &&
-               (n == 0 || n == 1)) {
-      FLAGS_comparisons = n;
-    } else if (sscanf(argv[i], "--use_existing_db=%d%c", &n, &junk) == 1 &&
-               (n == 0 || n == 1)) {
-      FLAGS_use_existing_db = n;
-    } else if (sscanf(argv[i], "--fixed_compute_shards_num=%d%c", &n, &junk) == 1) {
-      // if it is zero allocate shard number according to the memory node number
-      // if larger than 0 this number should larger than meory node number
-      FLAGS_fixed_compute_shards_num = n;
-    } else if (sscanf(argv[i], "--reuse_logs=%d%c", &n, &junk) == 1 &&
-               (n == 0 || n == 1)) {
-      FLAGS_reuse_logs = n;
-    } else if (sscanf(argv[i], "--num=%d%c", &n, &junk) == 1) {
-      FLAGS_num = n;
-    } else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {
-      FLAGS_reads = n;
-    } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
-      FLAGS_threads = n;
-    } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
-      FLAGS_value_size = n;
-    } else if (sscanf(argv[i], "--key_size=%d%c", &n, &junk) == 1) {
-      FLAGS_key_size = n;
-    } else if (sscanf(argv[i], "--write_buffer_size=%d%c", &n, &junk) == 1) {
-      FLAGS_write_buffer_size = n;
-    } else if (sscanf(argv[i], "--max_file_size=%d%c", &n, &junk) == 1) {
-      FLAGS_max_file_size = n;
-    } else if (sscanf(argv[i], "--block_size=%d%c", &n, &junk) == 1) {
-      FLAGS_block_size = n;
-    } else if (sscanf(argv[i], "--key_prefix=%d%c", &n, &junk) == 1) {
-      FLAGS_key_prefix = n;
-    } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
-      FLAGS_cache_size = n;
-    } else if (sscanf(argv[i], "--bloom_bits=%d%c", &n, &junk) == 1) {
-      FLAGS_bloom_bits = n;
-    } else if (sscanf(argv[i], "--open_files=%d%c", &n, &junk) == 1) {
-      FLAGS_open_files = n;
-    } else if (sscanf(argv[i], "--numa_awared=%d%c", &n, &junk) == 1) {
-      FLAGS_enable_numa = n;
-    } else if (sscanf(argv[i], "--block_restart_interval=%d%c", &n, &junk) == 1) {
-      FLAGS_block_restart_interval = n;
-    } else if (sscanf(argv[i], "--readwritepercent=%d%c", &n, &junk) == 1) {
-      FLAGS_readwritepercent = n;
-    } else if (sscanf(argv[i], "--duration=%d%c", &n, &junk) == 1) {
-      FLAGS_duration = n;
-    } else if (strncmp(argv[i], "--db=", 5) == 0) {
-      FLAGS_db = argv[i] + 5;
-    } else {
-      std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
-      std::exit(1);
-    }
-  }
   FLAGS_write_buffer_size = dLSM::Options().write_buffer_size;
   FLAGS_max_file_size = dLSM::Options().max_file_size;
   FLAGS_block_size = dLSM::Options().block_size;
@@ -1508,7 +1422,7 @@ int main(int argc, char** argv) {
   dLSM::g_env = dLSM::Env::Default();
 
   // Choose a location for the test database if none given with --db=<path>
-  if (FLAGS_db == nullptr) {
+  if (FLAGS_db.empty()) {
     dLSM::g_env->GetTestDirectory(&default_db_path);
     default_db_path += "/dbbench";
     FLAGS_db = default_db_path.c_str();
@@ -1516,5 +1430,7 @@ int main(int argc, char** argv) {
 
   dLSM::Benchmark benchmark;
   benchmark.Run();
+
+  gflags::ShutDownCommandLineFlags();
   return 0;
 }

@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.0)
 # Keep the version below in sync with the one in db.h
 project(dLSM VERSION 1.22.0 LANGUAGES C CXX)
-
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # C cmpstandard can be overridden when this is used as a sub-project.
 if(NOT CMAKE_C_STANDARD)
   # This project can use C11, but will gracefully decay down to C89.
@@ -351,6 +351,9 @@ target_link_libraries(Server dLSM)
 if(dLSM_BUILD_TESTS)
   enable_testing()
 
+  find_package(gflags REQUIRED)
+  include_directories(${gflags_INCLUDE_DIRS})
+
   # Prevent overriding the parent project's compiler/linker settings on Windows.
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   set(install_gtest OFF)
@@ -385,7 +388,7 @@ if(dLSM_BUILD_TESTS)
 
         "${test_file}"
     )
-    target_link_libraries("${test_target_name}" dLSM gmock gtest benchmark)
+    target_link_libraries("${test_target_name}" dLSM gmock gtest benchmark gflags)
     target_compile_definitions("${test_target_name}"
       PRIVATE
         ${dLSM_PLATFORM_NAME}=1
@@ -462,7 +465,7 @@ if(dLSM_BUILD_BENCHMARKS)
 
         "${bench_file}"
     )
-    target_link_libraries("${bench_target_name}" dLSM gmock gtest)
+    target_link_libraries("${bench_target_name}" dLSM gmock gtest gflags)
     target_compile_definitions("${bench_target_name}"
       PRIVATE
         ${dLSM_PLATFORM_NAME}=1
