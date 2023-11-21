@@ -1,6 +1,10 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#include <fstream>
 #ifdef NUMA
 #include <numa.h>
 #include <numaif.h>
@@ -104,11 +108,11 @@ DEFINE_int32(write_buffer_size, 0, "Number of bytes to buffer in memtable before
 DEFINE_int32(max_file_size, 0, "Number of bytes written to each file");
 DEFINE_int32(block_size, 0, "Approximate size of user data packed per block (before compression)");
 
-static bool FLAGS_record_speed = false;
 
-static uint64_t FLAGS_record_inerval = 1000;  // 1000ms = 1s
-
-static std::string FLAGS_record_dump_path = "reocrd_speed_result.txt";
+/*******  for write stall test   ******/
+DEFINE_bool(record_speed, false , "whetherto record speed info");
+DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
+DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
 
 namespace dLSM {
 
@@ -747,13 +751,11 @@ class Benchmark {
     }
   }
 
-  void RunBenchmark(int n, Slice name,
-                    void (Benchmark::*method)(ThreadState*)) {
-//    printf("Bechmark start\n");
+  void RunBenchmark(int n, Slice name, void (Benchmark::*method)(ThreadState*)) {
+  printf("Bechmark start\n");
   if (method == &Benchmark::WriteRandom || method == &Benchmark::WriteRandomSharded)
       Validation_Write();
-//    if (name.ToString() == "readrandom"){
-//    }
+
     SharedState shared(n);
 
     ThreadArg* arg = new ThreadArg[n];
@@ -795,6 +797,40 @@ class Benchmark {
     //sync with all the other compute nodes here
     rdma_mg->sync_with_computes_Cside();
 
+    // start record speed
+    auto speed_record_thread = std::thread([&]() {
+      if (!FLAGS_record_speed) {
+        return;
+      }
+      std::vector<uint64_t> ops_done;
+      ops_done.reserve(512);
+      std::chrono::milliseconds interval(FLAGS_record_interval);
+      auto next_exec_time = std::chrono::steady_clock::now();
+      while(true) {
+        next_exec_time += interval;
+        uint64_t tmp = 0;
+        for (int i = 0; i < n; i++) {
+          tmp += arg[i].thread->stats.GetFinishedOps();
+        }
+        ops_done.push_back(tmp);
+        std::this_thread::sleep_until(next_exec_time);
+        MutexLock l(&shared.mu);
+        if (shared.num_done == n) {
+          break;
+        }
+      }
+      std::ofstream f(FLAGS_record_dump_path, std::ios::out);
+      if (!f.is_open()) {
+        std::cerr << "fail to open speed record file, " << FLAGS_record_dump_path << std::endl;
+        return;
+      }
+      for (auto op : ops_done) {
+        f << op << std::endl;
+      }
+      f.close();
+    });
+    
+
     shared.start = true;
     shared.cv.SignalAll();
     while (shared.num_done < n) {
@@ -811,6 +847,8 @@ class Benchmark {
       count_comparator_.reset();
       fflush(stdout);
     }
+
+    speed_record_thread.join();
 
     for (int i = 0; i < n; i++) {
       delete arg[i].thread;
