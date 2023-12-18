@@ -108,6 +108,9 @@ DEFINE_int32(write_buffer_size, 0, "Number of bytes to buffer in memtable before
 DEFINE_int32(max_file_size, 0, "Number of bytes written to each file");
 DEFINE_int32(block_size, 0, "Approximate size of user data packed per block (before compression)");
 
+// flush related
+DEFINE_int32(max_background_flushes, dLSM::Options().max_background_flushes, "max_background_flushes");
+DEFINE_int32(max_background_compactions, dLSM::Options().max_background_compactions, "max_backgroud_compactions");
 
 /*******  for write stall test   ******/
 DEFINE_bool(record_speed, false , "whetherto record speed info");
@@ -938,6 +941,10 @@ class Benchmark {
     options.max_file_size = FLAGS_max_file_size;
     options.block_size = FLAGS_block_size;
     options.bloom_bits = FLAGS_bloom_bits;
+    
+    options.max_background_flushes = FLAGS_max_background_flushes;
+    options.max_background_compactions = FLAGS_max_background_compactions;
+
     options.block_restart_interval = FLAGS_block_restart_interval;
     if (FLAGS_comparisons) {
       options.comparator = &count_comparator_;
