@@ -179,6 +179,9 @@ struct dLSM_EXPORT Options {
   int bloom_bits = 10;
 
   std::vector<std::pair<Slice,Slice>>* ShardInfo = nullptr;// [Lower bound, upper bound)
+
+  // only write memtable, no flush and remote compaction
+  bool memtable_only = false;
 };
 
 // Options that control read operations

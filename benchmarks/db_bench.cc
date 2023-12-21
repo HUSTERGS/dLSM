@@ -116,7 +116,7 @@ DEFINE_int32(max_background_compactions, dLSM::Options().max_background_compacti
 DEFINE_bool(record_speed, false , "whetherto record speed info");
 DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
 DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
-
+DEFINE_bool(memtable_only, false, "only test memtable, write only");
 namespace dLSM {
 
 namespace {
@@ -942,6 +942,8 @@ class Benchmark {
     options.block_size = FLAGS_block_size;
     options.bloom_bits = FLAGS_bloom_bits;
     
+    options.memtable_only = FLAGS_memtable_only;
+
     options.max_background_flushes = FLAGS_max_background_flushes;
     options.max_background_compactions = FLAGS_max_background_compactions;
 

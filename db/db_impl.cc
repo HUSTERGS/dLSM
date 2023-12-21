@@ -3569,8 +3569,6 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
 //  w.sync = options.sync;
 //  w.done = false;
 
-
-
   // May temporarily Unlock and wait.
 //  Status status = Status::OK();
 #ifdef TIMEPRINT
@@ -3707,6 +3705,11 @@ Status DBImpl::PickupTableToWrite(bool force, uint64_t seq_num, MemTable*& mem_r
         mem_.store(temp_mem);
         //set the flush flag for imm
         assert(imm_.current_memtable_num() <= config::Immutable_StopWritesTrigger);
+        if (options_.memtable_only) {
+          mem_r->SimpleDelete();
+          mem_r = temp_mem;
+          return s;
+        }
         imm_.Add(mem_r);
         has_imm_.store(true, std::memory_order_release);
         InstallSuperVersion();
