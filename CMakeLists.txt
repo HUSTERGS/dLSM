@@ -480,6 +480,7 @@ if(dLSM_BUILD_BENCHMARKS)
 
   if(NOT BUILD_SHARED_LIBS)
     dLSM_benchmark("benchmarks/db_bench.cc")
+    dLSM_benchmark("benchmarks/skiplist_test.cc")
   endif(NOT BUILD_SHARED_LIBS)
 
   check_library_exists(sqlite3 sqlite3_open "" HAVE_SQLITE3)

@@ -117,6 +117,7 @@ DEFINE_bool(record_speed, false , "whetherto record speed info");
 DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
 DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
 DEFINE_bool(memtable_only, false, "only test memtable, write only");
+DEFINE_bool(fake_run, false, "not actually insert into db");
 namespace dLSM {
 
 namespace {
@@ -1102,7 +1103,11 @@ class Benchmark {
         bytes += value_size_ + key.size();
         thread->stats.FinishedSingleOp();
       }
-      s = db_->Write(write_options_, &batch);
+      if (FLAGS_fake_run) {
+        (void) batch;
+      } else {
+        s = db_->Write(write_options_, &batch);
+      }
       if (!s.ok()) {
         std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
         std::exit(1);
