@@ -1,5 +1,8 @@
 #include "db/dbformat.h"
 #include <memory>
+#include <pthread.h>
+#include <sched.h>
+#include <vector>
 #include <string>
 #include "util/testutil.h"
 #include "util/random.h"
@@ -11,11 +14,24 @@ using namespace dLSM;
 
 DEFINE_int32(num, 100, "entry num");
 DEFINE_int32(threads, 1, "threads");
-DEFINE_int32(key_size, 16, "key size");
+DEFINE_int32(key_size, 20, "key size");
 DEFINE_int32(value_size, 400, "value size");
 DEFINE_bool(table_per_thread, false, "each thread insert into single memtable");
 DEFINE_bool(seq_write, true, "if it is seq write");
 DEFINE_bool(fake_run, false, "not actually insert");
+DEFINE_bool(bind_cpu, true, "bind cpu");
+
+void print_parameters() {
+  std::cout << "run skiplist with parameters: \n"
+               "entry num:        \t" << FLAGS_num                << std::endl << 
+               "threads:          \t" << FLAGS_threads            << std::endl <<
+               "key size:         \t" << FLAGS_key_size           << std::endl <<
+               "value size:       \t" << FLAGS_value_size         << std::endl <<
+               "table per thread: \t" << FLAGS_table_per_thread   << std::endl <<
+               "seq write:        \t" << FLAGS_seq_write          << std::endl <<
+               "fake rune:        \t" << FLAGS_fake_run           << std::endl <<
+               "bind cpu:         \t" << FLAGS_bind_cpu           << std::endl;
+}
 
 Slice AllocateKey(std::unique_ptr<const char[]>* key_guard) {
     char* data = new char[FLAGS_key_size];
@@ -92,20 +108,17 @@ int main(int argc, char **argv) {
     
     
     int nums_per_thread = FLAGS_num / FLAGS_threads;
-    std::cout << "nums per threads : " << nums_per_thread << std::endl;
     RandomGenerator gen;
-    std::atomic<uint64_t> bytes{0};
-    std::atomic<uint64_t> ops{0};
     size_t table_num = FLAGS_table_per_thread ? FLAGS_threads : 1;
     std::vector<std::shared_ptr<MemTable>> mems;
     for (size_t i = 0; i < table_num; i++) {
         mems.emplace_back(std::make_shared<MemTable>(InternalKeyComparator(BytewiseComparator())));
     }
 
-    
-    double start = g_env->NowMicros();
     std::cout << "\n\n\nbenchmark start..." << std::endl;
+    std::cout << "nums per threads : " << nums_per_thread << std::endl;
 
+    double start = g_env->NowMicros();
     for (int tn = 0; tn < FLAGS_threads; tn++) {
         ts.emplace_back([&, tn]() {
             Random64 rand_gen(tn);
@@ -116,32 +129,39 @@ int main(int argc, char **argv) {
             for (int i = 0; i < nums_per_thread; i++) {
                 const int k = FLAGS_seq_write ? i : rand_gen.Next() % FLAGS_num;    
                 GenerateKeyFromInt(k, &key);
-                auto value = gen.Generate(FLAGS_value_size);
-                bytes += key.size() + value.size();
                 if (FLAGS_fake_run) {
                   (void) key;
-                  (void) value;
                 } else {
-                  mem->Add(k, dLSM::kTypeValue, key, value);
-                }
-                if (ops++ % 10000 == 0) {
-                  std::cout << "\rfinish " << ops;
+                  mem->Add(k, dLSM::kTypeValue, key, gen.Generate(FLAGS_value_size));
                 }
             }
         });
     }
-    
+
+    if (FLAGS_bind_cpu) {
+      int num_cores = std::thread::hardware_concurrency();
+      for (size_t i = 0; i < ts.size(); i++) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(i % num_cores, &cpuset);
+        pthread_setaffinity_np(ts[i].native_handle(), sizeof(cpu_set_t), &cpuset);
+      }
+    }
+
     for (auto &t : ts) {
         t.join();
     }
 
     double elapsed = (g_env->NowMicros() - start) * 1e-6;
     char rate[100];
+    uint64_t bytes = 1ull * (FLAGS_key_size + FLAGS_value_size) * FLAGS_num;
+    std::cout << "bytes : " << bytes << std::endl;
     std::snprintf(rate, sizeof(rate), "%6.1f MB/s",
                     (bytes / 1048576.0) / elapsed);
     
     std::cout << std::endl << FLAGS_num << " entry takes " << elapsed << " seconds to insert, " << std::string(rate) << std::endl;
-
+    
+    print_parameters();
     gflags::ShutDownCommandLineFlags();
     return 0;
 }
