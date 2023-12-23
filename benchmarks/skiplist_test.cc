@@ -1,12 +1,16 @@
-#include "db/dbformat.h"
+#include <atomic>
 #include <memory>
 #include <pthread.h>
 #include <sched.h>
 #include <vector>
 #include <string>
+#include <map>
+#include <gflags/gflags.h>
+
+#include "db/dbformat.h"
+#include "util/mutexlock.h"
 #include "util/testutil.h"
 #include "util/random.h"
-#include <gflags/gflags.h>
 #include "db/memtable.h"
 #include "include/dLSM/comparator.h"
 
@@ -20,9 +24,10 @@ DEFINE_bool(table_per_thread, false, "each thread insert into single memtable");
 DEFINE_bool(seq_write, true, "if it is seq write");
 DEFINE_bool(fake_run, false, "not actually insert");
 DEFINE_bool(bind_cpu, true, "bind cpu");
+DEFINE_string(db, "skiplist", "db, now support skiplist and c++ map");
 
 void print_parameters() {
-  std::cout << "run skiplist with parameters: \n"
+  std::cout << "run " << FLAGS_db << " with parameters: \n"
                "entry num:        \t" << FLAGS_num                << std::endl << 
                "threads:          \t" << FLAGS_threads            << std::endl <<
                "key size:         \t" << FLAGS_key_size           << std::endl <<
@@ -98,6 +103,49 @@ class RandomGenerator {
   }
 };
 
+class WriteOnlyDb {
+public:
+    virtual void Put(const Slice& key, const Slice& value) = 0;
+};
+
+class MemTableWrapper : public WriteOnlyDb {
+public:
+    MemTableWrapper(MemTable *m) : table_(m) {}
+    void Put(const Slice& key, const Slice& value) override {
+        table_->Add(0, dLSM::kTypeValue, key, value);
+    }
+private:
+    std::shared_ptr<MemTable> table_;
+};
+
+class CppMapWrapper : public WriteOnlyDb {
+public:
+    void Put(const Slice& key, const Slice& value) override {
+        SpinLock lock(&mu_);
+        m.insert({key.ToString(), value.ToString()});
+    }
+private:
+    SpinMutex mu_;
+    std::map<std::string, std::string> m;
+};
+
+
+class KvSperateMemTable : public WriteOnlyDb {
+public:
+    static const size_t INIT_BUFF_SIZE = 1024 * 1024 * 128;
+    KvSperateMemTable(MemTable* m) : table_(m), buff_(new char[INIT_BUFF_SIZE]) {}
+    void Put(const Slice& key, const Slice& value) override {
+        auto loc = offset_.fetch_add(value.size(), std::memory_order_relaxed);
+        std::memcpy(buff_.get() + loc, value.data(), value.size());
+        uint64_t vs[2] = {loc, value.size()};
+        Slice v_ptr(reinterpret_cast<char *>(vs), sizeof(vs));
+        table_->Add(0, dLSM::kTypeValue, key, v_ptr);
+    }
+private:
+    std::atomic<uint64_t> offset_;
+    std::shared_ptr<MemTable> table_;
+    std::unique_ptr<char []> buff_;
+};
 
 int main(int argc, char **argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -110,9 +158,18 @@ int main(int argc, char **argv) {
     int nums_per_thread = FLAGS_num / FLAGS_threads;
     RandomGenerator gen;
     size_t table_num = FLAGS_table_per_thread ? FLAGS_threads : 1;
-    std::vector<std::shared_ptr<MemTable>> mems;
+    std::vector<std::shared_ptr<WriteOnlyDb>> dbs;
     for (size_t i = 0; i < table_num; i++) {
-        mems.emplace_back(std::make_shared<MemTable>(InternalKeyComparator(BytewiseComparator())));
+      if (FLAGS_db == "skiplist") {
+        dbs.emplace_back(std::make_shared<MemTableWrapper>(new MemTable(InternalKeyComparator(BytewiseComparator()))));
+      } else if (FLAGS_db == "cppmap") {
+        dbs.emplace_back(std::make_shared<CppMapWrapper>());
+      } else if (FLAGS_db == "kvs_skiplist") {
+        dbs.emplace_back(std::make_shared<KvSperateMemTable>(new MemTable(InternalKeyComparator(BytewiseComparator()))));
+      } else {
+        std::cerr << "unknown db : " << FLAGS_db << std::endl;
+        exit(1);
+      }
     }
 
     std::cout << "\n\n\nbenchmark start..." << std::endl;
@@ -124,7 +181,7 @@ int main(int argc, char **argv) {
             Random64 rand_gen(tn);
             std::unique_ptr<const char[]> key_guard;
             Slice key = AllocateKey(&key_guard);
-            auto mem = FLAGS_table_per_thread ? mems[tn] : mems.front();
+            auto db = FLAGS_table_per_thread ? dbs[tn] : dbs.front();
 
             for (int i = 0; i < nums_per_thread; i++) {
                 const int k = FLAGS_seq_write ? i : rand_gen.Next() % FLAGS_num;    
@@ -132,7 +189,7 @@ int main(int argc, char **argv) {
                 if (FLAGS_fake_run) {
                   (void) key;
                 } else {
-                  mem->Add(k, dLSM::kTypeValue, key, gen.Generate(FLAGS_value_size));
+                  db->Put(key, gen.Generate(FLAGS_value_size));
                 }
             }
         });
