@@ -182,6 +182,8 @@ struct dLSM_EXPORT Options {
 
   // only write memtable, no flush and remote compaction
   bool memtable_only = false;
+  
+  bool compaction_time_record = false;
 };
 
 // Options that control read operations

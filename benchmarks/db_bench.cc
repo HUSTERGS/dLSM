@@ -118,6 +118,8 @@ DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
 DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
 DEFINE_bool(memtable_only, false, "only test memtable, write only");
 DEFINE_bool(fake_run, false, "not actually insert into db");
+DEFINE_bool(compaction_time_record, false, "record compaction_time");
+
 namespace dLSM {
 
 namespace {
@@ -810,6 +812,7 @@ class Benchmark {
       ops_done.reserve(512);
       std::chrono::milliseconds interval(FLAGS_record_interval);
       auto next_exec_time = std::chrono::steady_clock::now();
+      auto start_time_microsecond = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()).time_since_epoch().count();
       while(true) {
         next_exec_time += interval;
         uint64_t tmp = 0;
@@ -828,6 +831,8 @@ class Benchmark {
         std::cerr << "fail to open speed record file, " << FLAGS_record_dump_path << std::endl;
         return;
       }
+      // 开始时间，用于对齐compaction时间
+      f << start_time_microsecond << std::endl;
       for (auto op : ops_done) {
         f << op << std::endl;
       }
@@ -955,6 +960,7 @@ class Benchmark {
     options.max_open_files = FLAGS_open_files;
     options.filter_policy = filter_policy_;
     options.reuse_logs = FLAGS_reuse_logs;
+    options.compaction_time_record = FLAGS_compaction_time_record;
     //
     rdma_mg = Env::Default()->rdma_mg.get();
     number_of_key_total = FLAGS_num*FLAGS_threads; // whole range.

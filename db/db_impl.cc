@@ -17,6 +17,7 @@
 #include "db/write_batch_internal.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <set>
@@ -41,6 +42,8 @@
 
 namespace dLSM {
 
+
+const std::string DBImpl::CompactionTime::dump_path_ = "compaction_time_dump.txt";
 
 int SuperVersion::dummy = 0;
 void* const SuperVersion::kSVInUse = &SuperVersion::dummy;
@@ -182,6 +185,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       ,Total_time_elapse(0),
       flush_times(0)
 #endif
+      ,compaction_time_(new CompactionTime())
 {
   printf("DBImpl start\n");
 
@@ -297,7 +301,8 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname,
                                &internal_comparator_, &superversion_memlist_mtx)),
       super_version_number_(0),
       super_version(nullptr), local_sv_(new ThreadLocalPtr(&SuperVersionUnrefHandle)),
-      shard_target_node_id(0)
+      shard_target_node_id(0),
+      compaction_time_(new CompactionTime())
 {
 
 
@@ -991,10 +996,22 @@ void DBImpl::CompactMemTable() {
 
 //  imm->SetFlushState(MemTable::FLUSH_PROCESSING);
 //  base->Ref();
-#ifdef PROCESSANALYSIS
+
   auto start = std::chrono::high_resolution_clock::now();
-#endif
+  auto microseconds_since_epoch = std::chrono::time_point_cast<std::chrono::microseconds>(start).time_since_epoch().count();
+  
+  if (options_.compaction_time_record) {
+    compaction_time_->start(microseconds_since_epoch);
+  }
+  
   Status s = WriteLevel0Table(&f_job, &edit);
+  
+  if (options_.compaction_time_record) {
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::time_point_cast<std::chrono::microseconds>(end).time_since_epoch().count() - microseconds_since_epoch;
+    compaction_time_->add(microseconds_since_epoch, duration);
+  }
+
 #ifdef PROCESSANALYSIS
   auto stop = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
