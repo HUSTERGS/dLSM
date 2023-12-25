@@ -13,8 +13,11 @@
 #include "util/ThreadPool.h"
 #include "db/log_writer.h"
 #include "db/version_set.h"
+#include "util/duration.h"
 
 namespace dLSM {
+
+extern RecordDuration * duration_recorder[config::kNumLevels];
 
 struct Arg_for_persistent{
   VersionEdit_Merger* edit_merger;

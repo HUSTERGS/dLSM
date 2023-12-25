@@ -1,11 +1,28 @@
+#include "db/dbformat.h"
 #include <iostream>
 #include <memory_node/memory_node_keeper.h>
-
+#include <csignal>
 #include "util/rdma.h"
+
+
+volatile sig_atomic_t gSignalStatus = 0;
+
+// Signal 处理函数
+void signalHandler(int signal) {
+  std::cout << "Ctrl+C received." << std::endl;
+  for (int i = 0; i < config::kNumLevels; i++) {
+    if (dLSM::duration_recorder[i]) {
+      delete dLSM::duration_recorder[i];
+    }
+  }
+  exit(0);
+}
+
 
 //namespace dLSM{
 int main(int argc,char* argv[])
 {
+  std::signal(SIGINT, signalHandler);
   dLSM::Memory_Node_Keeper* mn_keeper;
   if (argc == 4){
     uint32_t tcp_port;
@@ -30,6 +47,9 @@ int main(int argc,char* argv[])
   }else{
     mn_keeper = new dLSM::Memory_Node_Keeper(true, 19843, 88);
     dLSM::RDMA_Manager::node_id = 0;
+  }
+  for (int i = 0; i < config::kNumLevels; i++) {
+    dLSM::duration_recorder[i] = new RecordDuration(RecordDuration::MNCompactionDuration, i);
   }
 
   mn_keeper->SetBackgroundThreads(12, dLSM::ThreadPoolType::CompactionThreadPool);

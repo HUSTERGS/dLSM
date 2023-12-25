@@ -13,6 +13,9 @@
 
 namespace dLSM {
 
+
+RecordDuration * duration_recorder[config::kNumLevels];
+
 std::shared_ptr<RDMA_Manager> Memory_Node_Keeper::rdma_mg = std::shared_ptr<RDMA_Manager>();
 dLSM::Memory_Node_Keeper::Memory_Node_Keeper(bool use_sub_compaction,
                                                   uint32_t tcp_port, int pr_s)
@@ -1867,6 +1870,7 @@ int Memory_Node_Keeper::server_sock_connect(const char* servername, int port) {
   }
 
   void Memory_Node_Keeper::sst_compaction_handler(void* arg) {
+    RecordDuration::Clock cl(true);
     RDMA_Request* request = ((Arg_for_handler*) arg)->request;
     std::string client_ip = ((Arg_for_handler*) arg)->client_ip;
     uint8_t target_node_id = ((Arg_for_handler*) arg)->target_node_id;
@@ -2089,6 +2093,8 @@ int Memory_Node_Keeper::server_sock_connect(const char* servername, int port) {
     delete request;
     delete compact;
     delete (Arg_for_handler*) arg;
+
+    duration_recorder[c.level()]->add(cl.end());
   }
   // THis funciton is deprecated now
   void Memory_Node_Keeper::qp_reset_handler(RDMA_Request* request,

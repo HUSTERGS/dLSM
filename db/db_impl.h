@@ -6,6 +6,7 @@
 #define STORAGE_dLSM_DB_DB_IMPL_H_
 
 #include "db/dbformat.h"
+#include "db/log_format.h"
 #include "db/log_writer.h"
 #include "db/snapshot.h"
 #include <atomic>
@@ -17,6 +18,7 @@
 #include <string>
 #include <utility>
 #include <fstream>
+#include <chrono>
 
 #include "dLSM/db.h"
 #include "dLSM/env.h"
@@ -24,6 +26,7 @@
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/mutexlock.h"
+#include "util/duration.h"
 
 #include "memtable_list.h"
 #include "version_set.h"
@@ -155,45 +158,6 @@ class DBImpl : public DB {
 //  struct CompactionState;
 //  struct SubcompactionState;
   struct Writer;
-
-
-struct CompactionTime {
-    static const std::string dump_path_;
-    // 基本逻辑是，记录micro sec级别的数据，记录最开始的开始时间，用于跟写负载对齐，以及后续每一次compaction的开始以及结束之间，不同的线程的数据同时记录
-    SpinMutex mutex;
-    std::atomic<uint64_t> start_time{UINT64_MAX};
-    // <start_time, duration>
-    std::vector<std::pair<uint64_t, uint64_t>> data;
-    
-    void start(uint64_t t) {
-        uint64_t origin;
-        do {
-            origin = start_time.load(std::memory_order_relaxed);
-        } while(origin > t && !start_time.compare_exchange_weak(origin, t, std::memory_order_seq_cst));
-    }
-
-    void add(uint64_t start, uint64_t duration) {
-        SpinLock lock(&mutex);
-        data.push_back(std::make_pair(start, duration));
-    }
-
-    ~CompactionTime() {
-        to_file();
-    }
-
-    void to_file() {
-        std::ofstream f(dump_path_, std::ios::out);
-        if (!f.is_open()) {
-            std::cerr << "fail to open speed record file, " << dump_path_ << std::endl;
-            return;
-        }
-        f << start_time.load(std::memory_order_relaxed) << std::endl;
-        for (auto &p : data) {
-            f << p.first << "," << p.second << std::endl;
-        }
-        f.close();
-    }
-};
 
   // Information for a manual compaction
   struct ManualCompaction {
@@ -373,7 +337,7 @@ struct CompactionTime {
   std::atomic<size_t> Total_time_elapse;
   std::atomic<size_t> flush_times;
 #endif
-    std::shared_ptr<CompactionTime> compaction_time_;
+  RecordDuration duration_recorder[RecordDuration::DurationType::MNCompactionDuration];
 };
 
 // Sanitize db options.  The caller should delete result.info_log if

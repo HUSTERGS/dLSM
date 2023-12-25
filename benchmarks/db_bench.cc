@@ -118,7 +118,7 @@ DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
 DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
 DEFINE_bool(memtable_only, false, "only test memtable, write only");
 DEFINE_bool(fake_run, false, "not actually insert into db");
-DEFINE_bool(compaction_time_record, false, "record compaction_time");
+DEFINE_bool(duration_analysis, false, "enable duration analysis");
 
 namespace dLSM {
 
@@ -960,7 +960,7 @@ class Benchmark {
     options.max_open_files = FLAGS_open_files;
     options.filter_policy = filter_policy_;
     options.reuse_logs = FLAGS_reuse_logs;
-    options.compaction_time_record = FLAGS_compaction_time_record;
+    options.duration_analysis = FLAGS_duration_analysis;
     //
     rdma_mg = Env::Default()->rdma_mg.get();
     number_of_key_total = FLAGS_num*FLAGS_threads; // whole range.

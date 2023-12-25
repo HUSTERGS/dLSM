@@ -42,9 +42,6 @@
 
 namespace dLSM {
 
-
-const std::string DBImpl::CompactionTime::dump_path_ = "compaction_time_dump.txt";
-
 int SuperVersion::dummy = 0;
 void* const SuperVersion::kSVInUse = &SuperVersion::dummy;
 void* const SuperVersion::kSVObsolete = nullptr;
@@ -185,8 +182,11 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       ,Total_time_elapse(0),
       flush_times(0)
 #endif
-      ,compaction_time_(new CompactionTime())
 {
+  for (int i = 0; i < RecordDuration::DurationType::MNCompactionDuration; i++) {
+    duration_recorder[i].type = static_cast<RecordDuration::DurationType>(i);
+  }
+
   printf("DBImpl start\n");
 
 //  for(auto iter : options_.ShardInfo){
@@ -301,10 +301,11 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname,
                                &internal_comparator_, &superversion_memlist_mtx)),
       super_version_number_(0),
       super_version(nullptr), local_sv_(new ThreadLocalPtr(&SuperVersionUnrefHandle)),
-      shard_target_node_id(0),
-      compaction_time_(new CompactionTime())
+      shard_target_node_id(0)
 {
-
+  for (int i = 0; i < RecordDuration::DurationType::MNCompactionDuration; i++) {
+    duration_recorder[i].type = static_cast<RecordDuration::DurationType>(i);
+  }
 
   std::shared_ptr<RDMA_Manager> rdma_mg = env_->rdma_mg;
   env_->SetBackgroundThreads(options_.max_background_flushes,ThreadPoolType::FlushThreadPool);
@@ -992,24 +993,19 @@ void DBImpl::CompactMemTable() {
       return;
   }
   DEBUG_arg("picked metable number is %lu", f_job.mem_vec.size());
+  // TODO: (gs) 这个部分，没太看懂，里面有一个able_to_flush，是memtable并发写入导致的。
   f_job.Waitforpendingwriter();
 
 //  imm->SetFlushState(MemTable::FLUSH_PROCESSING);
 //  base->Ref();
-
+  // start 保留因为PROCESSANALYSIS需要
   auto start = std::chrono::high_resolution_clock::now();
-  auto microseconds_since_epoch = std::chrono::time_point_cast<std::chrono::microseconds>(start).time_since_epoch().count();
-  
-  if (options_.compaction_time_record) {
-    compaction_time_->start(microseconds_since_epoch);
-  }
-  
+
+  RecordDuration::Clock cl(true);
   Status s = WriteLevel0Table(&f_job, &edit);
   
-  if (options_.compaction_time_record) {
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::time_point_cast<std::chrono::microseconds>(end).time_since_epoch().count() - microseconds_since_epoch;
-    compaction_time_->add(microseconds_since_epoch, duration);
+  if (options_.duration_analysis) {
+    duration_recorder[RecordDuration::DurationType::FlushDuration].add(cl.end());
   }
 
 #ifdef PROCESSANALYSIS
@@ -3674,7 +3670,7 @@ Status DBImpl::PickupTableToWrite(bool force, uint64_t seq_num, MemTable*& mem_r
       // We have filled up the current memtable, but the previous
       // one is still being compacted, so we wait.
       // the wait will never get signalled.
-
+      RecordDuration::Clock cl(true);
       // We check the imm again in the while loop, because the state may have already been changed before you acquire the Lock.
       std::unique_lock<std::mutex> lck(superversion_memlist_mtx);
 //      imm_mtx.lock();
@@ -3689,10 +3685,15 @@ Status DBImpl::PickupTableToWrite(bool force, uint64_t seq_num, MemTable*& mem_r
 //        printf("thread was waked up\n");
         mem_r = mem_.load();
       }
+      if (options_.duration_analysis)
+        duration_recorder[RecordDuration::DurationType::L0StopDuration].add(cl.end());
 //      imm_mtx.unlock();
     } else if(level0_filenum > config::kL0_SlowdownWritesTrigger && !delayed){
+      RecordDuration::Clock cl(true);
       env_->SleepForMicroseconds(1000);
       delayed = true;
+      if (options_.duration_analysis)
+        duration_recorder[RecordDuration::DurationType::L0SlowDuration].add(cl.end());
     }else{
       std::unique_lock<std::mutex> l(superversion_memlist_mtx);
 //      assert(locked == false);
@@ -3759,6 +3760,7 @@ Status DBImpl::PickupTableToWrite(bool force, uint64_t seq_num, MemTable*& mem_r
       // get the snapshot for imm then check it so that this memtable pointer is guarantee
       // to be the one this thread want.
       // TODO: use imm_mtx to control the access.
+      // 这里跟PickMTX为啥不是一个mutex
       std::unique_lock<std::mutex> l(superversion_memlist_mtx);
       mem_r = imm_.PickMemtablesSeqBelong(seq_num);
       if (mem_r != nullptr)
