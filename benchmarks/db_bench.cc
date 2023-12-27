@@ -808,7 +808,8 @@ class Benchmark {
       if (!FLAGS_record_speed) {
         return;
       }
-      std::vector<uint64_t> ops_done;
+      // <time(micro), op_done>
+      std::vector<std::pair<uint64_t, uint64_t>> ops_done;
       ops_done.reserve(512);
       std::chrono::milliseconds interval(FLAGS_record_interval);
       auto next_exec_time = std::chrono::steady_clock::now();
@@ -819,7 +820,8 @@ class Benchmark {
         for (int i = 0; i < n; i++) {
           tmp += arg[i].thread->stats.GetFinishedOps();
         }
-        ops_done.push_back(tmp);
+        auto time_stamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()).time_since_epoch().count();
+        ops_done.push_back(std::make_pair(time_stamp, tmp));
         std::this_thread::sleep_until(next_exec_time);
         MutexLock l(&shared.mu);
         if (shared.num_done == n) {
@@ -834,7 +836,7 @@ class Benchmark {
       // 开始时间，用于对齐compaction时间
       f << start_time_microsecond << std::endl;
       for (auto op : ops_done) {
-        f << op << std::endl;
+        f << op.first << "," << op.second << std::endl;
       }
       f.close();
     });
