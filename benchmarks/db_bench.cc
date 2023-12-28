@@ -28,6 +28,7 @@
 #include "util/mutexlock.h"
 #include "util/random.h"
 #include "util/testutil.h"
+#include "db/db_impl.h"
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -115,7 +116,9 @@ DEFINE_int32(max_background_compactions, dLSM::Options().max_background_compacti
 /*******  for write stall test   ******/
 DEFINE_bool(record_speed, false , "whetherto record speed info");
 DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
-DEFINE_string(record_dump_path, "record_speed_result.txt", "speed info record dump path");
+DEFINE_string(ops_info_dump_path, "ops_info.txt", "speed info record dump path");
+DEFINE_string(level_info_dump_path, "level_info.txt", "level info dump path");
+DEFINE_string(imm_info_dump_path, "imm_info.txt", "imm level file count");
 DEFINE_bool(memtable_only, false, "only test memtable, write only");
 DEFINE_bool(fake_run, false, "not actually insert into db");
 DEFINE_bool(duration_analysis, false, "enable duration analysis");
@@ -804,12 +807,17 @@ class Benchmark {
     rdma_mg->sync_with_computes_Cside();
 
     // start record speed
-    auto speed_record_thread = std::thread([&]() {
+    auto speed_record_thread = std::thread([&, this]() {
       if (!FLAGS_record_speed) {
         return;
       }
       // <time(micro), op_done>
       std::vector<std::pair<uint64_t, uint64_t>> ops_done;
+      // <time(micro), level_file_count>
+      std::vector<std::pair<uint64_t, int>> level_infos[config::kNumLevels];
+      // <time(micro), imm_file_count>
+      std::vector<std::pair<uint64_t, int>> imm_info;
+
       ops_done.reserve(512);
       std::chrono::milliseconds interval(FLAGS_record_interval);
       auto next_exec_time = std::chrono::steady_clock::now();
@@ -821,24 +829,64 @@ class Benchmark {
           tmp += arg[i].thread->stats.GetFinishedOps();
         }
         auto time_stamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()).time_since_epoch().count();
-        ops_done.push_back(std::make_pair(time_stamp, tmp));
+        ops_done.emplace_back(time_stamp, tmp);
+
+        auto level_file_count = ((DBImpl *)(db_))->level_file_count();
+        int imm_file_count = ((DBImpl *)(db_))->imm_file_count();
+
+        for (int i = 0; i < config::kNumLevels; i++) {
+          level_infos[i].emplace_back(time_stamp, level_file_count[i]);
+        }
+        imm_info.emplace_back(time_stamp, imm_file_count);
         std::this_thread::sleep_until(next_exec_time);
         MutexLock l(&shared.mu);
         if (shared.num_done == n) {
           break;
         }
       }
-      std::ofstream f(FLAGS_record_dump_path, std::ios::out);
-      if (!f.is_open()) {
-        std::cerr << "fail to open speed record file, " << FLAGS_record_dump_path << std::endl;
-        return;
+
+      // ops file
+      {
+        std::ofstream f(FLAGS_ops_info_dump_path, std::ios::out);
+        if (!f.is_open()) {
+          std::cerr << "fail to open speed record file, " << FLAGS_ops_info_dump_path << std::endl;
+          return;
+        }
+        // 开始时间，用于对齐compaction时间
+        f << start_time_microsecond << std::endl;
+        for (auto op : ops_done) {
+          f << op.first << "," << op.second << std::endl;
+        }
+        f.close();
       }
-      // 开始时间，用于对齐compaction时间
-      f << start_time_microsecond << std::endl;
-      for (auto op : ops_done) {
-        f << op.first << "," << op.second << std::endl;
+      
+      
+      // level info file (from 0 to kNumLevels - 1)
+      for (int i = 0; i < config::kNumLevels; i++) {
+        auto level_file_path = FLAGS_level_info_dump_path + "_" + std::to_string(i);
+        std::ofstream f(level_file_path, std::ios::out);
+        if (!f.is_open()) {
+          std::cerr << "fail to open level info record file for level " << i << " skip..." << std::endl;
+          continue;
+        }
+        for (auto info : level_infos[i]) {
+          f << info.first << "," << info.second << std::endl;
+        }
+        f.close();
       }
-      f.close();
+
+      // imm level file count
+      {
+        std::ofstream f(FLAGS_imm_info_dump_path, std::ios::out);
+        if (!f.is_open()) {
+          std::cerr << "fail to open imm record file, " << FLAGS_imm_info_dump_path << std::endl;
+          return;
+        }
+        for (auto info : imm_info) {
+          f << info.first << "," << info.second << std::endl;
+        }
+        f.close();
+      }
     });
     
 

@@ -113,6 +113,19 @@ class DBImpl : public DB {
   void GetApproximateSizes(const Range* range, int n, uint64_t* sizes) override;
   void CompactRange(const Slice* begin, const Slice* end) override;
 
+  std::vector<int> level_file_count() {
+    std::vector<int> file_count;
+    file_count.resize(config::kNumLevels);
+    for (int i = 0; i < config::kNumLevels; i++) {
+      file_count[i] = versions_->NumLevelFiles(i);
+    }
+    return file_count;
+  }
+
+  int imm_file_count() {
+    return imm_.current_memtable_num_.load();
+  }
+
   // Extra methods (for testing) that are not in the public DB interface
 
   // Compact any files in the named level that overlap [*begin,*end]
