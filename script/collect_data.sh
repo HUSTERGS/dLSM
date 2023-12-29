@@ -1,0 +1,2 @@
+scp gs@s53:~/dLSM/build/MNCompactionDuration* .
+current_time=$(date +"%Y-%m-%d-%H-%M-%S") && find . -maxdepth 1 -type f -name '*.txt' ! -name 'CMakeCache.txt' -exec tar -czvf "${current_time}.tar.gz" {} +

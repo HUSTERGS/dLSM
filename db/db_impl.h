@@ -122,6 +122,10 @@ class DBImpl : public DB {
     return file_count;
   }
 
+  std::vector<uint64_t> level_size() {
+    return versions_->level_size();
+  }
+
   int imm_file_count() {
     return imm_.current_memtable_num_.load();
   }

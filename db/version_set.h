@@ -321,6 +321,7 @@ class VersionSet {
   //TODO: Finalize is not required for the comppute node side.
   Status LogAndApply(VersionEdit* edit);
 
+  std::vector<uint64_t> level_size();
 
   // Recover the last saved descriptor from persistent storage.
   Status Recover(bool* save_manifest);

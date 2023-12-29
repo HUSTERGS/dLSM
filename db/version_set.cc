@@ -1256,6 +1256,16 @@ void VersionSet::MarkFileNumberUsed(uint64_t number) {
   }
 }
 
+std::vector<uint64_t> VersionSet::level_size() {
+  std::vector<uint64_t> result;
+  for (int level = 0; level < config::kNumLevels; level++) {
+    // TODO: (gs) 不确定会不会有问题
+    const uint64_t level_bytes = TotalFileSize(current_->levels_[level]) - TotalFileSize(current_->in_progress[level]);
+    result.push_back(level_bytes);
+  }
+  return result;
+}
+
 void VersionSet::Finalize(Version* v) {
   // Precomputed best level for next compaction
 //  int best_level = -1;

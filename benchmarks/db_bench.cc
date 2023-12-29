@@ -5,6 +5,7 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
+#include <sstream>
 #ifdef NUMA
 #include <numa.h>
 #include <numaif.h>
@@ -29,6 +30,7 @@
 #include "util/random.h"
 #include "util/testutil.h"
 #include "db/db_impl.h"
+#include "db/memtable.h"
 
 // Comma-separated list of operations to run in the specified order
 //   Actual benchmarks:
@@ -117,7 +119,8 @@ DEFINE_int32(max_background_compactions, dLSM::Options().max_background_compacti
 DEFINE_bool(record_speed, false , "whetherto record speed info");
 DEFINE_int32(record_interval, 1000, "speed info record interval (ms)");
 DEFINE_string(ops_info_dump_path, "ops_info.txt", "speed info record dump path");
-DEFINE_string(level_info_dump_path, "level_info.txt", "level info dump path");
+DEFINE_string(level_file_nr_dump_path, "level_file_nr", "level file number info dump path");
+DEFINE_string(level_file_sz_dump_path, "level_file_sz", "level file size info dump path");
 DEFINE_string(imm_info_dump_path, "imm_info.txt", "imm level file count");
 DEFINE_bool(memtable_only, false, "only test memtable, write only");
 DEFINE_bool(fake_run, false, "not actually insert into db");
@@ -812,13 +815,20 @@ class Benchmark {
         return;
       }
       // <time(micro), op_done>
-      std::vector<std::pair<uint64_t, uint64_t>> ops_done;
+      std::vector<std::pair<uint64_t, uint64_t>> ops_done(1024);
       // <time(micro), level_file_count>
-      std::vector<std::pair<uint64_t, int>> level_infos[config::kNumLevels];
-      // <time(micro), imm_file_count>
-      std::vector<std::pair<uint64_t, int>> imm_info;
+      std::vector<std::pair<uint64_t, int>> level_file_nr[config::kNumLevels];
+      // <time(micro), level_file_size (bytes)>
+      std::vector<std::pair<uint64_t, uint64_t>> level_file_sz[config::kNumLevels];
 
-      ops_done.reserve(512);
+      for (int i = 0; i < config::kNumLevels; i++) {
+        level_file_nr[i].reserve(1024);
+        level_file_sz[i].reserve(1024);
+      }
+
+      // <time(micro), imm_file_count>
+      std::vector<std::pair<uint64_t, int>> imm_info(1024);
+      
       std::chrono::milliseconds interval(FLAGS_record_interval);
       auto next_exec_time = std::chrono::steady_clock::now();
       auto start_time_microsecond = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now()).time_since_epoch().count();
@@ -832,10 +842,12 @@ class Benchmark {
         ops_done.emplace_back(time_stamp, tmp);
 
         auto level_file_count = ((DBImpl *)(db_))->level_file_count();
+        auto level_file_size = ((DBImpl *)(db_))->level_size();
         int imm_file_count = ((DBImpl *)(db_))->imm_file_count();
 
         for (int i = 0; i < config::kNumLevels; i++) {
-          level_infos[i].emplace_back(time_stamp, level_file_count[i]);
+          level_file_nr[i].emplace_back(time_stamp, level_file_count[i]);
+          level_file_sz[i].emplace_back(time_stamp, level_file_size[i]);
         }
         imm_info.emplace_back(time_stamp, imm_file_count);
         std::this_thread::sleep_until(next_exec_time);
@@ -861,15 +873,29 @@ class Benchmark {
       }
       
       
-      // level info file (from 0 to kNumLevels - 1)
+      // level file nr dump file (from 0 to kNumLevels - 1)
       for (int i = 0; i < config::kNumLevels; i++) {
-        auto level_file_path = FLAGS_level_info_dump_path + "_" + std::to_string(i);
-        std::ofstream f(level_file_path, std::ios::out);
+        auto level_file_nr_path = FLAGS_level_file_nr_dump_path + "_" + std::to_string(i) + ".txt";
+        std::ofstream f(level_file_nr_path, std::ios::out);
         if (!f.is_open()) {
           std::cerr << "fail to open level info record file for level " << i << " skip..." << std::endl;
           continue;
         }
-        for (auto info : level_infos[i]) {
+        for (auto info : level_file_nr[i]) {
+          f << info.first << "," << info.second << std::endl;
+        }
+        f.close();
+      }
+
+      // level file sz dump file (from 0 to kNumLevels - 1)
+      for (int i = 0; i < config::kNumLevels; i++) {
+        auto level_file_sz_path = FLAGS_level_file_sz_dump_path + "_" + std::to_string(i) + ".txt";
+        std::ofstream f(level_file_sz_path, std::ios::out);
+        if (!f.is_open()) {
+          std::cerr << "fail to open level info record file for level " << i << " skip..." << std::endl;
+          continue;
+        }
+        for (auto info : level_file_sz[i]) {
           f << info.first << "," << info.second << std::endl;
         }
         f.close();
@@ -1518,6 +1544,57 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
 
 }  // namespace dLSM
 
+
+// simple json format file
+void dump_options_to_file() {
+  std::stringstream ss;
+  ss << "{" << std::endl;
+#define print_gflags_option(name) ss << "\t\"" << #name << "\" : " << FLAGS_##name << "," << std::endl;
+#define print_db_option(name) ss << "\t\"" << #name << "\" : " << dLSM::Options().##name << "," << std::endl;
+#define print_const_config(name) \
+{\
+  using namespace config; \
+  ss << "\t\"" << #name << "\" : " << name << "," << std::endl; \
+}
+
+
+print_gflags_option(num)
+print_gflags_option(threads)
+print_gflags_option(key_size)
+print_gflags_option(value_size)
+print_gflags_option(write_buffer_size)
+print_gflags_option(max_file_size)
+print_gflags_option(block_size);
+print_gflags_option(max_background_flushes)
+print_gflags_option(max_background_compactions)
+
+print_const_config(kNumLevels)
+print_const_config(MaxImmuNumPerFlush)
+print_const_config(Immutable_FlushTrigger)
+print_const_config(Immutable_StopWritesTrigger)
+print_const_config(kL0_CompactionTrigger)
+print_const_config(kL0_SlowdownWritesTrigger)
+print_const_config(kL0_StopWritesTrigger)
+print_const_config(max_mega_bytes_for_level_base);
+
+// print macro configuration
+#ifdef BYTEADDRESSABLE
+ss << "\t\"BYTEADDRESSABLE : 1" << std::endl;
+#else
+ss << "\t\"BYTEADDRESSABLE : 0" << std::endl;
+#endif
+
+ss << "}" << std::endl;
+
+std::fstream f("configuration.txt", std::ios::out);
+f << ss.str();
+f.close();
+
+#undef print_gflags_option
+#undef print_db_option
+#undef print_const_config
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   dLSM::RDMA_Manager::node_id = 2*FLAGS_compute_node_id+1;
@@ -1538,6 +1615,8 @@ int main(int argc, char** argv) {
 
   dLSM::Benchmark benchmark;
   benchmark.Run();
+
+  dump_options_to_file();
 
   gflags::ShutDownCommandLineFlags();
   return 0;
