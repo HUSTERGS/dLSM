@@ -2,7 +2,7 @@
 
 # 读取RoCE模式的RDMA设备的counter数据，计算并输出实时的使用带宽
 
-counter_path="/sys/class/infiniband/mlx5_0/ports/1/counters/port_rcv_data"
+counter_path="/sys/class/infiniband/mlx5_0/ports/1/counters/port_rcvt_data"
 
 start=0
 lasting_time=0
