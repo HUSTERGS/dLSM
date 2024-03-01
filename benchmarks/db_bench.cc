@@ -1317,7 +1317,12 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
     int found = 0;
     KeyBuffer key;
     for (int i = 0; i < reads_; i++) {
-      Iterator* iter = db_->NewIterator(options);
+#ifdef BYTEADDRESSABLE
+    Iterator* iter = db_->NewSEQIterator(ReadOptions());
+#endif
+#ifndef BYTEADDRESSABLE
+    Iterator* iter = db_->NewIterator(ReadOptions());
+#endif
       const int k = thread->rand.Uniform(FLAGS_num);
       key.Set(k);
       iter->Seek(key.slice());
@@ -1326,6 +1331,7 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
       for (int j = 0; j < FLAGS_seek_nexts && iter->Valid(); ++j) {
         // Copy out iterator's value to make sure we read them.
         (void ) iter->value().ToString();
+        thread->stats.AddBytes(iter->key().size() + iter->value().size());
         iter->Next();
         assert(iter->status().ok());
       }
