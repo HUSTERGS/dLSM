@@ -4,7 +4,11 @@
 
 #ifndef STORAGE_dLSM_DB_MEMTABLE_H_
 #define STORAGE_dLSM_DB_MEMTABLE_H_
-#define MEMTABLE_SEQ_SIZE 153846 //Make the in memory buffer close to 64MB 1 shard origin
+// #define MEMTABLE_SEQ_SIZE 153846 //Make the in memory buffer close to 64MB 1 shard origin
+
+// 
+#define MEMTABLE_SEQ_SIZE 122000
+
 //#define MEMTABLE_SEQ_SIZE 19231 //Make the in memory buffer close to 64MB
 //#define MEMTABLE_SEQ_SIZE 38462
 // 8 shard's memtable size X 8  should be a little larger that the memtable of 64MB,

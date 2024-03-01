@@ -170,7 +170,7 @@ struct dLSM_EXPORT Options {
   // Default: currently false, but may become true later.
   bool reuse_logs = false;
 
-  bool near_data_compaction = true;
+  bool near_data_compaction = false;
   // If non-null, use the specified filter policy to reduce disk reads.
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.

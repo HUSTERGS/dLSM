@@ -75,6 +75,8 @@ static int FLAGS_reads = -1;
 // Number of concurrent threads to run.
 static int FLAGS_threads = 1;
 
+static int FLAGS_seek_nexts = 0;
+
 // Size of each value
 static int FLAGS_value_size = 400;
 // Size of each value
@@ -382,6 +384,12 @@ class Stats {
                  name.ToString().c_str(), seconds_ * 1e6 / done_, (long)(done_/elapsed),
                  (extra.empty() ? "" : " "), extra.c_str());
 
+    std::fprintf(stdout, "%-12s : %11.3f micros/op; %ld ops/sec;%s%s\n",
+                 name.ToString().c_str(), seconds_ * 1e6 / done_, (long)(done_/elapsed),
+                 (extra.empty() ? "" : " "), extra.c_str());
+    std::fprintf(stdout, "%-12s : %11.3f micros/op; %ld ops/sec;%s%s\n",
+                 name.ToString().c_str(), seconds_ * 1e6 / done_, (long)(done_/elapsed),
+                 (extra.empty() ? "" : " "), extra.c_str());
     if (FLAGS_histogram) {
       std::fprintf(stdout, "Microseconds per op:\n%s\n",
                    hist_.ToString().c_str());
@@ -1314,6 +1322,14 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
       key.Set(k);
       iter->Seek(key.slice());
       if (iter->Valid() && iter->key() == key.slice()) found++;
+
+      for (int j = 0; j < FLAGS_seek_nexts && iter->Valid(); ++j) {
+        // Copy out iterator's value to make sure we read them.
+        (void ) iter->value().ToString();
+        iter->Next();
+        assert(iter->status().ok());
+      }
+
       delete iter;
       thread->stats.FinishedSingleOp();
     }
@@ -1333,6 +1349,14 @@ GenerateKeyFromInt(thread->rand.Next() % (FLAGS_num * FLAGS_threads), &key);
       key.Set(k);
       iter->Seek(key.slice());
       if (iter->Valid() && iter->key() == key.slice()) found++;
+
+      for (int j = 0; j < FLAGS_seek_nexts && iter->Valid(); ++j) {
+        // Copy out iterator's value to make sure we read them.
+        (void ) iter->value().ToString();
+        iter->Next();
+        assert(iter->status().ok());
+      }
+
       thread->stats.FinishedSingleOp();
     }
     delete iter;
@@ -1465,6 +1489,8 @@ int main(int argc, char** argv) {
       FLAGS_num = n;
     } else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {
       FLAGS_reads = n;
+    } else if (sscanf(argv[i], "--seek_nexts=%d%c", &n, &junk) == 1) {
+      FLAGS_seek_nexts = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
       FLAGS_threads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
